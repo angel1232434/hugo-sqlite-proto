@@ -1,3 +1,7 @@
 <footer>
   <p class="meta">Generado con Hugo · índice con SQLite en build · sin base de datos en producción</p>
+  {{ with hugo.Data.words }}
+  <p class="meta">Total de palabras indexadas: <strong>{{ .total }}</strong></p>
+  {{ end }}
 </footer>
+

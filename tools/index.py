@@ -2,22 +2,15 @@
 """tools/index.py — content/**/*.md → SQLite (solo en build) → JSON estático.
 
 Filosofía Unix: hace UNA cosa. Lee Markdown, rellena build/site.db y la
-consulta con SQL para exportar dos ficheros:
+consulta con SQL para exportar tres ficheros:
 
   static/search.json  → lo consume static/search.js en el navegador
   data/tags.json      → lo consume Hugo en layouts/index.html
+  data/words.json     → lo consume Hugo en layouts/partials/footer.html
 
 La base de datos NO se despliega: public/ contiene solo ficheros estáticos.
-
-Solo biblioteca estándar (sqlite3, json, re, pathlib). Estilo funcional:
-funciones puras para parsear; los efectos (disco, SQL) quedan al final.
-
-Límites (a propósito, KISS): front matter YAML con pares `clave: valor` y
-listas en línea `tags: [a, b]`. Nada de TOML (+++) ni listas multilínea.
-
-Docs: https://docs.python.org/3/library/sqlite3.html
-      https://www.sqlite.org/json1.html
 """
+
 import json
 import re
 import sqlite3
@@ -29,6 +22,7 @@ CONTENT = Path("content")
 DB = Path("build/site.db")
 OUT_SEARCH = Path("static/search.json")
 OUT_TAGS = Path("data/tags.json")
+OUT_WORDS = Path("data/words.json")
 
 SCHEMA = """
 CREATE TABLE posts (
@@ -43,9 +37,12 @@ CREATE TABLE tags (
   tag TEXT NOT NULL,
   PRIMARY KEY (url, tag)
 );
+CREATE TABLE words (
+  url TEXT PRIMARY KEY REFERENCES posts(url),
+  n INTEGER NOT NULL
+);
 """
 
-# SQL produce directamente el JSON (extensión json1 de SQLite).
 Q_SEARCH = """
 SELECT json_group_array(json_object(
   'url', url, 'title', title, 'date', date, 'summary', summary,
@@ -58,7 +55,6 @@ FROM (
 )
 """
 
-# Agregación: cuántas páginas hay por etiqueta.
 Q_TAGS = """
 SELECT json_group_array(json_object('tag', tag, 'total', total))
 FROM (
@@ -66,7 +62,11 @@ FROM (
 )
 """
 
-# --- funciones puras ---------------------------------------------------------
+Q_WORDS = """
+SELECT json_object('total', COALESCE(SUM(n), 0))
+FROM words
+"""
+
 
 def split_front_matter(text):
     """'---\\nclave: valor\\n---\\ncuerpo' → (bloque_yaml, cuerpo)."""
@@ -80,7 +80,7 @@ def parse_scalar(raw):
         return [parse_scalar(x) for x in v[1:-1].split(",") if x.strip()]
     if v in ("true", "false"):
         return v == "true"
-    return re.sub(r"^(['\"])(.*)\1$", r"\2", v)  # quita comillas simétricas
+    return re.sub(r"^(['\"])(.*)\1$", r"\2", v)
 
 
 def parse_meta(block):
@@ -89,14 +89,13 @@ def parse_meta(block):
     return {k.strip(): parse_scalar(v) for k, v in pairs}
 
 
-# (patrón, reemplazo) aplicados en orden: Markdown → texto plano
 CLEANERS = [
-    (r"```.*?```", " "),                              # bloques de código
-    (r"`([^`]*)`", r"\1"),                            # código en línea
-    (r"!?\[([^\]]*)\]\([^)]*\)", r"\1"),              # enlaces/imágenes → texto
-    (r"^[ \t]{0,3}(?:#{1,6}|>|[-*+]|\d+\.)[ \t]+", ""),  # marcas de bloque
-    (r"\*{1,3}", ""),                                 # énfasis
-    (r"\s+", " "),                                    # espacios
+    (r"```.*?```", " "),
+    (r"`([^`]*)`", r"\1"),
+    (r"!?\[([^\]]*)\]\([^)]*\)", r"\1"),
+    (r"^[ \t]{0,3}(?:#{1,6}|>|[-*+]|\d+\.)[ \t]+", ""),
+    (r"\*{1,3}", ""),
+    (r"\s+", " "),
 ]
 
 
@@ -110,7 +109,7 @@ def shorten(text, n=160):
 
 
 def url_of(path):
-    """content/posts/x.md → /posts/x/  (como hace Hugo)."""
+    """content/posts/x.md → /posts/x/ (como hace Hugo)."""
     parts = path.relative_to(CONTENT).with_suffix("").parts
     parts = parts[:-1] if parts[-1] == "index" else parts
     return "/" + "/".join(parts) + "/"
@@ -127,6 +126,7 @@ def read_page(path):
         "date": str(meta.get("date", "")),
         "summary": meta.get("description") or shorten(text),
         "tags": tags if isinstance(tags, list) else [tags],
+        "word_count": len(text.split()),
         "draft": meta.get("draft", False) is True,
         "text": text,
     }
@@ -136,8 +136,6 @@ def read_all():
     files = (p for p in sorted(CONTENT.rglob("*.md")) if p.name != "_index.md")
     return [page for page in map(read_page, files) if not page["draft"]]
 
-
-# --- efectos: disco y SQL ----------------------------------------------------
 
 def build_db(pages):
     DB.parent.mkdir(parents=True, exist_ok=True)
@@ -150,6 +148,9 @@ def build_db(pages):
     con.executemany(
         "INSERT OR IGNORE INTO tags(url, tag) VALUES (?, ?)",
         [(p["url"], t) for p in pages for t in p["tags"]])
+    con.executemany(
+        "INSERT INTO words(url, n) VALUES (?, ?)",
+        [(p["url"], p["word_count"]) for p in pages])
     con.commit()
     return con
 
@@ -166,9 +167,11 @@ def main():
     con = build_db(pages)
     export(con, Q_SEARCH, OUT_SEARCH)
     export(con, Q_TAGS, OUT_TAGS)
+    export(con, Q_WORDS, OUT_WORDS)
     con.close()
-    print(f"index: {len(pages)} páginas → {OUT_SEARCH}, {OUT_TAGS}")
+    print(f"index: {len(pages)} páginas → {OUT_SEARCH}, {OUT_TAGS}, {OUT_WORDS}")
 
 
 if __name__ == "__main__":
     main()
+
