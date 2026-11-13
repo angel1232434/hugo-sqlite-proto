@@ -20,11 +20,30 @@ const haystack = post => normalize(`${post.title} ${post.tags.join(" ")} ${post.
 // Un post coincide si contiene TODOS los términos
 const matches = ts => post => ts.every(t => haystack(post).includes(t));
 
-const search = (posts, query) => {
-  const ts = terms(query);
-  return ts.length ? posts.filter(matches(ts)) : [];
+const countOccurrences = (text, term) =>
+  text.split(term).length - 1;
+
+const score = (post, ts) => {
+  const title = normalize(post.title);
+  const tags = normalize(post.tags.join(" "));
+  const text = normalize(post.text);
+
+  return ts.reduce((total, term) =>
+    total +
+    countOccurrences(title, term) * 3 +
+    countOccurrences(tags, term) * 2 +
+    countOccurrences(text, term), 0);
 };
 
+const search = (posts, query) => {
+  const ts = terms(query);
+
+  return ts.length
+    ? posts
+        .filter(matches(ts))
+        .sort((a, b) => score(b, ts) - score(a, ts))
+    : [];
+};
 // --- efectos (DOM) ----------------------------------------------------------
 
 // textContent, nunca innerHTML: el contenido se trata como texto, no como HTML
