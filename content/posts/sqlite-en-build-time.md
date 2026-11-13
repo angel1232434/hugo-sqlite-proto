@@ -2,7 +2,7 @@
 title: "SQLite solo en tiempo de build"
 date: 2026-10-28
 description: "Usar SQL para indexar y agregar, sin llevar la base de datos a producción."
-tags: [sqlite, build, unix, static]
+tags: [sqlite, hugo, sql, build, unix, static]
 ---
 SQL es muy buen lenguaje para **agrupar y filtrar**. Un sitio estático no
 necesita una base de datos *en ejecución*, pero sí puede usarla *mientras se
